@@ -1,47 +1,62 @@
 package db
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"os"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
-var (
-	DB *pgxpool.Pool
-)
+var DB *gorm.DB
 
-func ConnectDB() {
-	godotenv.Load()
+// ConnectDB initializes and configures the GORM connection pool.
+func ConnectDB() *gorm.DB {
+	_ = godotenv.Load()
+
 	dbURL := os.Getenv("DATABASE_URL")
 	if dbURL == "" {
 		log.Fatal("DATABASE_URL environment variable is not set")
 	}
 
-	config, err := pgxpool.ParseConfig(dbURL)
+	var err error
+	DB, err = gorm.Open(postgres.Open(dbURL), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Info),
+	})
 	if err != nil {
-		log.Fatalf("Unable to parse DATABASE_URL: %v", err)
+		log.Fatalf("Unable to connect to database: %v", err)
 	}
 
-	config.MaxConns = 10
-	config.MinConns = 2
-	config.MaxConnLifetime = time.Hour
-
-	DB, err = pgxpool.NewWithConfig(context.Background(), config)
+	// Extract standard *sql.DB instance to configure connection pool limits
+	sqlDB, err := DB.DB()
 	if err != nil {
-		log.Fatalf("Unable to create connection pool: %v", err)
+		log.Fatalf("Unable to retrieve underlying sql.DB instance: %v", err)
 	}
 
-	fmt.Println("Database connection established")
+	sqlDB.SetMaxOpenConns(10)
+	sqlDB.SetMaxIdleConns(2)
+	sqlDB.SetConnMaxLifetime(time.Hour)
+
+	fmt.Println("Database connection established (GORM)")
+	return DB
 }
 
+// CloseDB gracefully shuts down the GORM database connection pool.
 func CloseDB() {
 	if DB != nil {
-		DB.Close()
+		sqlDB, err := DB.DB()
+		if err != nil {
+			log.Printf("Error retrieving sql.DB during closure: %v", err)
+			return
+		}
+		if err := sqlDB.Close(); err != nil {
+			log.Printf("Error closing database connection: %v", err)
+			return
+		}
 		fmt.Println("Database connection closed")
 	}
 }
